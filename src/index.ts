@@ -10,12 +10,14 @@
  */
 import type { Context } from 'cordis'
 import type { IncomingMessage, ServerResponse } from 'node:http'
+import { createHash } from 'node:crypto'
 import {
   existsSync,
   mkdirSync,
   readdirSync,
   readFileSync,
   renameSync,
+  rmSync,
   writeFileSync,
 } from 'node:fs'
 import { homedir } from 'node:os'
@@ -347,9 +349,28 @@ const CACHE_ROOT = join(homedir(), '.dsh', 'timeline-cache')
 const CACHE_REFRESH_GAP_MS = 15000
 /** 启动温:逐会话生成缓存时的间隔，避免扫描风暴。 */
 const WARMUP_STAGGER_MS = 500
+/** 停留刷新门限：会话被连续请求至少这么久才允许后台刷新（快速切换不折腾磁盘）。 */
+const STAY_MIN_MS = 5000
 
 /** 后台刷新单飞：正在刷新中的会话 id 集合。 */
 const refreshJobs = new Set<string>()
+
+/** 会话停留跟踪：firstSeen 距首次请求时刻；连续请求（间隔 ≤ STAY_MIN_MS）延续停留。 */
+const staySince = new Map<string, number>()
+
+/**
+ * 缓存文件格式：{ at, data, sum }。sum = sha256(at + JSON(data))，
+ * 读取时校验，损坏/篡改/截断一律视为未命中并删除重建。
+ */
+interface DiskCacheBox<T> {
+  at: number
+  data: T
+  sum: string
+}
+
+function digestOf(at: number, data: unknown): string {
+  return createHash('sha256').update(String(at)).update('\u0001').update(JSON.stringify(data)).digest('hex')
+}
 
 /** 缓存文件名安全化：sessionId 中的异常字符防路径逃逸。 */
 function safeCacheName(id: string): string {
@@ -360,29 +381,70 @@ function diskCachePath(kind: DiskKind, id: string): string {
   return join(CACHE_ROOT, `${kind}-${safeCacheName(id)}.json`)
 }
 
-/** 读磁盘缓存；不存在或损坏视为未命中。 */
-function readDiskCache<T>(kind: DiskKind, id: string): { at: number; data: T } | undefined {
+/** 尽力删除文件（失败不阻塞调用方）。 */
+function safelyUnlink(path: string): void {
   try {
-    const path = diskCachePath(kind, id)
+    rmSync(path, { force: true })
+  } catch {
+    /* 删除失败无碍：损坏文件只导致每次都重建 */
+  }
+}
+
+/**
+ * 读磁盘缓存。不存在/解析失败/校验和不符均视为未命中；损坏文件当场删除，
+ * 由首次生成路径重建（应对外部篡改、截断、杀进程半写等不安全因素）。
+ */
+function readDiskCache<T>(kind: DiskKind, id: string): { at: number; data: T } | undefined {
+  const path = diskCachePath(kind, id)
+  try {
     if (!existsSync(path)) return undefined
-    const box = JSON.parse(readFileSync(path, 'utf8')) as { at?: unknown; data?: unknown }
-    if (typeof box.at !== 'number' || !Array.isArray(box.data)) return undefined
+    const box = JSON.parse(readFileSync(path, 'utf8')) as { at?: unknown; data?: unknown; sum?: unknown }
+    if (typeof box.at !== 'number' || !Array.isArray(box.data) || typeof box.sum !== 'string') {
+      safelyUnlink(path)
+      return undefined
+    }
+    if (box.sum !== digestOf(box.at, box.data)) {
+      safelyUnlink(path)
+      return undefined
+    }
     return { at: box.at, data: box.data as T }
   } catch {
+    safelyUnlink(path)
     return undefined
   }
 }
 
-/** 写磁盘缓存（原子写：先写临时文件再 rename，避免半写坏档）。 */
+/**
+ * 写磁盘缓存，**写全、验完、再原子替换**：新内容先落临时文件，校验和读回验算
+ * 通过后才 rename 覆盖旧文件。进程在任一时刻中断，最多留下 .tmp-* 残留，
+ * 当前缓存文件要么是完整的旧版、要么是完整的新版，绝不半写。
+ */
 function writeDiskCache<T>(kind: DiskKind, id: string, data: T): void {
   try {
     mkdirSync(CACHE_ROOT, { recursive: true })
     const path = diskCachePath(kind, id)
-    const tmp = join(CACHE_ROOT, `.tmp-${safeCacheName(id)}-${process.pid}`)
-    writeFileSync(tmp, JSON.stringify({ at: Date.now(), data }), 'utf8')
+    const tmp = join(CACHE_ROOT, `.tmp-${safeCacheName(id)}-${process.pid}-${Date.now()}`)
+    const at = Date.now()
+    const payload = JSON.stringify({ at, data, sum: digestOf(at, data) } satisfies DiskCacheBox<T>)
+    writeFileSync(tmp, payload, 'utf8')
+    // 写回读校准：内容与校验和一致才允许替换当前缓存。
+    const back = JSON.parse(readFileSync(tmp, 'utf8')) as DiskCacheBox<T>
+    if (back.sum !== digestOf(back.at, back.data)) throw new Error('cache verification failed')
     renameSync(tmp, path)
   } catch (err) {
     console.warn('[dsh-timeline] 缓存写入失败:', err)
+  }
+}
+
+/** 启动清理：中断遗留的 .tmp-* 残留不影响读取，但一并扫掉保持目录干净。 */
+function cleanStaleTmpFiles(): void {
+  try {
+    if (!existsSync(CACHE_ROOT)) return
+    for (const name of readdirSync(CACHE_ROOT)) {
+      if (name.startsWith('.tmp-')) safelyUnlink(join(CACHE_ROOT, name))
+    }
+  } catch {
+    /* 清理失败可忽略 */
   }
 }
 
@@ -434,9 +496,24 @@ async function refreshSession(ctx: Context, kind: DiskKind, sessionId: string): 
   }
 }
 
-/** 调度一次后台刷新：距上次真实数据足够久且没有在途任务时才开始。 */
+/**
+ * 调度一次后台刷新。三道闸：该会话停留 ≥ STAY_MIN_MS（快速切换不折腾磁盘）、
+ * 距上次真实数据 ≥ CACHE_REFRESH_GAP_MS、无在途任务（单飞）。
+ */
 function scheduleRefresh(ctx: Context, kind: DiskKind, sessionId: string, lastAt: number): void {
-  if (Date.now() - lastAt < CACHE_REFRESH_GAP_MS) return
+  const now = Date.now()
+  const seen = staySince.get(sessionId)
+  if (seen === undefined || now - seen > STAY_MIN_MS) {
+    // 新一轮停留的起点（此前从未出现，或用户离开超过门限后回来）
+    staySince.set(sessionId, now)
+    if (staySince.size > 200) {
+      const oldest = staySince.keys().next().value
+      if (oldest !== undefined) staySince.delete(oldest)
+    }
+    return
+  }
+  if (now - seen < STAY_MIN_MS) return // 停留不足 5s：不刷新
+  if (now - lastAt < CACHE_REFRESH_GAP_MS) return
   if (refreshJobs.has(sessionId)) return
   refreshJobs.add(sessionId)
   void refreshSession(ctx, kind, sessionId)
@@ -452,6 +529,7 @@ function scheduleRefresh(ctx: Context, kind: DiskKind, sessionId: string, lastAt
 async function warmUpCache(ctx: Context): Promise<void> {
   const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms))
   await sleep(2000)
+  cleanStaleTmpFiles()
   const root = join(homedir(), '.dsh', 'sessions')
   let dirs: string[] = []
   try {

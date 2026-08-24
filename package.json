@@ -1,6 +1,6 @@
 {
   "name": "dsh-timeline",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Interaction timeline rail for DSH web: browse, search and jump across every turn of a long conversation.",
   "type": "module",
   "repository": {
