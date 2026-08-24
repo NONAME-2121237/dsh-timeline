@@ -10,6 +10,16 @@
  */
 import type { Context } from 'cordis'
 import type { IncomingMessage, ServerResponse } from 'node:http'
+import {
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  renameSync,
+  writeFileSync,
+} from 'node:fs'
+import { homedir } from 'node:os'
+import { join } from 'node:path'
 
 /** The webServer service face this plugin uses (structural mirror). */
 interface HistoryWebServer {
@@ -212,44 +222,30 @@ async function listUserMessages(ctx: Context, payload: unknown): Promise<History
   if (typeof sessionId !== 'string' || sessionId === '') {
     return { ok: false, error: '缺少 sessionId' }
   }
-  // Serve from the cache when fresh: repeat panel opens (and the client's
-  // prefetch) skip the full-log replay entirely.
+  // 内存新鲜缓存：重复打开（及客户端预取）直接命中，零 I/O。
   const cached = historyCache.get(sessionId)
   if (cached !== undefined && Date.now() - cached.at < HISTORY_CACHE_TTL) {
     return { ok: true, items: cached.items }
   }
-  // Fast path: the session is live in this process — read its in-memory
-  // append-only log snapshot directly. No persistence read, no replay
-  // validation, no I/O: this is what makes repeat opens near-instant.
-  const sessions = ctx.get('sessions') as HistorySessionStore | undefined
-  const liveEvents = sessions?.get(sessionId)?.events
-  if (liveEvents !== undefined) {
-    const items = collectUserMessages(liveEvents)
-    if (historyCache.size >= HISTORY_CACHE_MAX) {
-      const oldest = historyCache.keys().next().value
-      if (oldest !== undefined) historyCache.delete(oldest)
-    }
-    historyCache.set(sessionId, { at: Date.now(), items })
-    return { ok: true, items }
+  // 磁盘缓存：命中即返回，不阻塞真实读取；后台按需渐进刷新（历史只增不改）。
+  const disk = readDiskCache<{ seq: number; time: number; text: string }[]>('messages', sessionId)
+  if (disk !== undefined) {
+    storeHistoryCache(sessionId, disk.data)
+    scheduleRefresh(ctx, 'messages', sessionId, disk.at)
+    return { ok: true, items: disk.data }
   }
-  // Slow path: the session is not live here (detached/persisted only).
-  const sessionQuery = ctx.get('sessionQuery') as HistorySessionQuery | undefined
-  if (sessionQuery === undefined) {
-    return { ok: false, error: 'sessionQuery 服务不可用' }
-  }
+  // 无缓存：首次生成（实时读 → 内存 + 落盘）。
+  let events: readonly HistorySessionEvent[] | undefined
   try {
-    const snapshot = await sessionQuery.readSession(sessionId)
-    const events = snapshot && Array.isArray(snapshot.events) ? snapshot.events : []
-    const items = collectUserMessages(events)
-    if (historyCache.size >= HISTORY_CACHE_MAX) {
-      const oldest = historyCache.keys().next().value
-      if (oldest !== undefined) historyCache.delete(oldest)
-    }
-    historyCache.set(sessionId, { at: Date.now(), items })
-    return { ok: true, items }
+    events = await readSessionEvents(ctx, sessionId)
   } catch (err) {
     return { ok: false, error: String(err instanceof Error ? err.message : err) }
   }
+  if (events === undefined) return { ok: false, error: 'sessionQuery 服务不可用' }
+  const items = collectUserMessages(events ?? [])
+  storeHistoryCache(sessionId, items)
+  writeDiskCache('messages', sessionId, items)
+  return { ok: true, items }
 }
 
 /** Filter one event list down to human-sent user messages, seq-ascending. */
@@ -336,6 +332,162 @@ const turnCache = new Map<string, { at: number; turns: TurnItem[] }>()
 const TURN_CACHE_TTL = 3000
 const TURN_CACHE_MAX = 50
 
+/* ------------------------- 磁盘缓存（持久层） ------------------------- */
+
+/**
+ * 会话历史只增不改，轮次/消息列表可以持久化：请求命中磁盘缓存时直接返回，
+ * 真实数据由后台任务按间隔渐进刷新（先展示、再校准），冷启动/大会话不再
+ * 阻塞在 `readSession` 磁盘读取上。
+ */
+type DiskKind = 'turns' | 'messages'
+
+/** 缓存根目录：~/.dsh/timeline-cache/（与 DSH 用户数据同层）。 */
+const CACHE_ROOT = join(homedir(), '.dsh', 'timeline-cache')
+/** 同会话真实数据刷新的最小间隔：历史不会自己改动，无需高频。 */
+const CACHE_REFRESH_GAP_MS = 15000
+/** 启动温:逐会话生成缓存时的间隔，避免扫描风暴。 */
+const WARMUP_STAGGER_MS = 500
+
+/** 后台刷新单飞：正在刷新中的会话 id 集合。 */
+const refreshJobs = new Set<string>()
+
+/** 缓存文件名安全化：sessionId 中的异常字符防路径逃逸。 */
+function safeCacheName(id: string): string {
+  return id.replace(/[^A-Za-z0-9._-]/g, '_')
+}
+
+function diskCachePath(kind: DiskKind, id: string): string {
+  return join(CACHE_ROOT, `${kind}-${safeCacheName(id)}.json`)
+}
+
+/** 读磁盘缓存；不存在或损坏视为未命中。 */
+function readDiskCache<T>(kind: DiskKind, id: string): { at: number; data: T } | undefined {
+  try {
+    const path = diskCachePath(kind, id)
+    if (!existsSync(path)) return undefined
+    const box = JSON.parse(readFileSync(path, 'utf8')) as { at?: unknown; data?: unknown }
+    if (typeof box.at !== 'number' || !Array.isArray(box.data)) return undefined
+    return { at: box.at, data: box.data as T }
+  } catch {
+    return undefined
+  }
+}
+
+/** 写磁盘缓存（原子写：先写临时文件再 rename，避免半写坏档）。 */
+function writeDiskCache<T>(kind: DiskKind, id: string, data: T): void {
+  try {
+    mkdirSync(CACHE_ROOT, { recursive: true })
+    const path = diskCachePath(kind, id)
+    const tmp = join(CACHE_ROOT, `.tmp-${safeCacheName(id)}-${process.pid}`)
+    writeFileSync(tmp, JSON.stringify({ at: Date.now(), data }), 'utf8')
+    renameSync(tmp, path)
+  } catch (err) {
+    console.warn('[dsh-timeline] 缓存写入失败:', err)
+  }
+}
+
+/** 内存缓存写入（带容量上限的简单 FIFO 淘汰）。 */
+function storeHistoryCache(sessionId: string, items: { seq: number; time: number; text: string }[]): void {
+  if (historyCache.size >= HISTORY_CACHE_MAX) {
+    const oldest = historyCache.keys().next().value
+    if (oldest !== undefined) historyCache.delete(oldest)
+  }
+  historyCache.set(sessionId, { at: Date.now(), items })
+}
+
+function storeTurnCache(sessionId: string, turns: TurnItem[]): void {
+  if (turnCache.size >= TURN_CACHE_MAX) {
+    const oldest = turnCache.keys().next().value
+    if (oldest !== undefined) turnCache.delete(oldest)
+  }
+  turnCache.set(sessionId, { at: Date.now(), turns })
+}
+
+/** 读某会话的真实事件列表（live 内存优先、磁盘回退）；undefined = 无可用来源。 */
+async function readSessionEvents(ctx: Context, sessionId: string): Promise<readonly HistorySessionEvent[] | undefined> {
+  const sessions = ctx.get('sessions') as HistorySessionStore | undefined
+  const liveEvents = sessions?.get(sessionId)?.events
+  if (liveEvents !== undefined) return liveEvents
+  const sessionQuery = ctx.get('sessionQuery') as HistorySessionQuery | undefined
+  if (sessionQuery === undefined) return undefined
+  const snapshot = await sessionQuery.readSession(sessionId)
+  return snapshot && Array.isArray(snapshot.events) ? snapshot.events : []
+}
+
+/** 后台渐进刷新：读真实数据 → 写盘 + 写内存缓存（单飞，失败静默待下轮）。 */
+async function refreshSession(ctx: Context, kind: DiskKind, sessionId: string): Promise<void> {
+  let events: readonly HistorySessionEvent[] | undefined
+  try {
+    events = await readSessionEvents(ctx, sessionId)
+  } catch {
+    return
+  }
+  if (events === undefined) return
+  if (kind === 'turns') {
+    const turns = collectTurns(events ?? [])
+    writeDiskCache(kind, sessionId, turns)
+    storeTurnCache(sessionId, turns)
+  } else {
+    const items = collectUserMessages(events ?? [])
+    writeDiskCache(kind, sessionId, items)
+    storeHistoryCache(sessionId, items)
+  }
+}
+
+/** 调度一次后台刷新：距上次真实数据足够久且没有在途任务时才开始。 */
+function scheduleRefresh(ctx: Context, kind: DiskKind, sessionId: string, lastAt: number): void {
+  if (Date.now() - lastAt < CACHE_REFRESH_GAP_MS) return
+  if (refreshJobs.has(sessionId)) return
+  refreshJobs.add(sessionId)
+  void refreshSession(ctx, kind, sessionId)
+    .catch(() => { /* 静默：下一请求再试 */ })
+    .finally(() => { refreshJobs.delete(sessionId) })
+}
+
+/**
+ * 启动预热：扫描 DSH 会话目录（~/.dsh/sessions/<workspace>/<sessionId>/），
+ * 对还没有磁盘缓存的会话逐个后台生成（一次 500ms 节流）；目录形态变化时
+ * 静默跳过，不影响正常请求路径。
+ */
+async function warmUpCache(ctx: Context): Promise<void> {
+  const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms))
+  await sleep(2000)
+  const root = join(homedir(), '.dsh', 'sessions')
+  let dirs: string[] = []
+  try {
+    const workspaces = existsSync(root) ? readdirSync(root) : []
+    for (const workspace of workspaces) {
+      try {
+        dirs.push(...readdirSync(join(root, workspace)))
+      } catch {
+        /* 单个工作区不可读则跳过 */
+      }
+    }
+  } catch (err) {
+    console.warn('[dsh-timeline] 会话目录扫描失败:', err)
+    return
+  }
+  let built = 0
+  for (const name of dirs) {
+    if (built >= 300) return
+    // 目录名可能是 "session-<uuid>" 形态，剥离前缀后再试
+    const candidates = [name, name.replace(/^session-/, '')]
+    for (const id of candidates) {
+      if (id === '' || built >= 300) continue
+      if (readDiskCache<TurnItem[]>('turns', id) !== undefined) break // 已有缓存：跳过
+      if (refreshJobs.has(id)) break
+      refreshJobs.add(id)
+      void refreshSession(ctx, 'turns', id)
+        .catch(() => {})
+        .finally(() => { refreshJobs.delete(id) })
+      built++
+      await sleep(WARMUP_STAGGER_MS)
+      break
+    }
+  }
+  console.log(`[dsh-timeline] 启动预热完成：本次生成 ${built} 个轮次缓存`)
+}
+
 /** One API method dispatch: full turn list for the timeline (spec F2-F5). */
 async function listTurns(ctx: Context, payload: unknown): Promise<TurnsOk | HistoryErr> {
   const record = payload as { sessionId?: unknown } | null
@@ -347,25 +499,24 @@ async function listTurns(ctx: Context, payload: unknown): Promise<TurnsOk | Hist
   if (cached !== undefined && Date.now() - cached.at < TURN_CACHE_TTL) {
     return { ok: true, turns: cached.turns, total: cached.turns.length }
   }
+  // 磁盘缓存：命中即返回，不阻塞真实读取；后台按需渐进刷新（历史只增不改）。
+  const disk = readDiskCache<TurnItem[]>('turns', sessionId)
+  if (disk !== undefined) {
+    storeTurnCache(sessionId, disk.data)
+    scheduleRefresh(ctx, 'turns', sessionId, disk.at)
+    return { ok: true, turns: disk.data, total: disk.data.length }
+  }
+  // 无缓存：首次生成（实时读 → 内存 + 落盘）。
   let events: readonly HistorySessionEvent[] | undefined
-  const sessions = ctx.get('sessions') as HistorySessionStore | undefined
-  events = sessions?.get(sessionId)?.events
-  if (events === undefined) {
-    const sessionQuery = ctx.get('sessionQuery') as HistorySessionQuery | undefined
-    if (sessionQuery === undefined) return { ok: false, error: 'sessionQuery 服务不可用' }
-    try {
-      const snapshot = await sessionQuery.readSession(sessionId)
-      events = snapshot && Array.isArray(snapshot.events) ? snapshot.events : []
-    } catch (err) {
-      return { ok: false, error: String(err instanceof Error ? err.message : err) }
-    }
+  try {
+    events = await readSessionEvents(ctx, sessionId)
+  } catch (err) {
+    return { ok: false, error: String(err instanceof Error ? err.message : err) }
   }
+  if (events === undefined) return { ok: false, error: 'sessionQuery 服务不可用' }
   const turns = collectTurns(events ?? [])
-  if (turnCache.size >= TURN_CACHE_MAX) {
-    const oldest = turnCache.keys().next().value
-    if (oldest !== undefined) turnCache.delete(oldest)
-  }
-  turnCache.set(sessionId, { at: Date.now(), turns })
+  storeTurnCache(sessionId, turns)
+  writeDiskCache('turns', sessionId, turns)
   return { ok: true, turns, total: turns.length }
 }
 
@@ -422,4 +573,6 @@ export function apply(ctx: Context): void {
       writeJson(res, 404, { ok: false, error: `unknown history API method "${method}"` })
     },
   }), 'dsh-timeline: /history/api route')
+  // 启动预热：后台为没有磁盘缓存的会话逐个生成轮次缓存，不阻塞启动。
+  void warmUpCache(ctx)
 }
