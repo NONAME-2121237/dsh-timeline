@@ -63,6 +63,13 @@ bash ~/.dsh/profiles/web/node_modules/dsh-history/restart-dsh-web.sh
 # then install dsh-timeline through any channel above
 ```
 
+## Caching & performance
+
+- The host keeps per-session turn/message lists in `~/.dsh/timeline-cache/` (atomic writes; corrupted files fall back gracefully).
+- Request order: fresh in-memory cache (3s) → disk cache (milliseconds) → first-generation only (then persisted).
+- Startup warm-up scans `~/.dsh/sessions` and generates caches for sessions that have none (500ms stagger), so the rail is ready before you click.
+- After a disk hit the real data is re-read in the background at most every 15s (session history is append-only), so new turns appear within ~15s.
+
 ## Usage
 
 - The rail appears automatically on the right edge of the message area — nothing to open.
