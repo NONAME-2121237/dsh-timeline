@@ -355,8 +355,8 @@ const STAY_MIN_MS = 5000
 /** 后台刷新单飞：正在刷新中的会话 id 集合。 */
 const refreshJobs = new Set<string>()
 
-/** 会话停留跟踪：firstSeen 距首次请求时刻；连续请求（间隔 ≤ STAY_MIN_MS）延续停留。 */
-const staySince = new Map<string, number>()
+/** 会话停留跟踪：since = 本轮停留起点，last = 上次请求；请求间隔 ≤ STAY_MIN_MS 视为连续停留。 */
+const staySince = new Map<string, { since: number; last: number }>()
 
 /**
  * 缓存文件格式：{ at, data, sum }。sum = sha256(at + JSON(data))，
@@ -503,16 +503,17 @@ async function refreshSession(ctx: Context, kind: DiskKind, sessionId: string): 
 function scheduleRefresh(ctx: Context, kind: DiskKind, sessionId: string, lastAt: number): void {
   const now = Date.now()
   const seen = staySince.get(sessionId)
-  if (seen === undefined || now - seen > STAY_MIN_MS) {
-    // 新一轮停留的起点（此前从未出现，或用户离开超过门限后回来）
-    staySince.set(sessionId, now)
+  if (seen === undefined || now - seen.last > STAY_MIN_MS) {
+    // 首次请求，或距上次请求过久（离开/切换）：开启新一轮停留段。
+    staySince.set(sessionId, { since: now, last: now })
     if (staySince.size > 200) {
       const oldest = staySince.keys().next().value
       if (oldest !== undefined) staySince.delete(oldest)
     }
     return
   }
-  if (now - seen < STAY_MIN_MS) return // 停留不足 5s：不刷新
+  seen.last = now
+  if (now - seen.since < STAY_MIN_MS) return // 连续停留不足 5s：不刷新
   if (now - lastAt < CACHE_REFRESH_GAP_MS) return
   if (refreshJobs.has(sessionId)) return
   refreshJobs.add(sessionId)
