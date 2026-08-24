@@ -65,10 +65,11 @@ bash ~/.dsh/profiles/web/node_modules/dsh-history/restart-dsh-web.sh
 
 ## Caching & performance
 
-- The host keeps per-session turn/message lists in `~/.dsh/timeline-cache/` (atomic writes; corrupted files fall back gracefully).
+- The host keeps per-session turn/message lists in `~/.dsh/timeline-cache/`.
 - Request order: fresh in-memory cache (3s) → disk cache (milliseconds) → first-generation only (then persisted).
 - Startup warm-up scans `~/.dsh/sessions` and generates caches for sessions that have none (500ms stagger), so the rail is ready before you click.
-- After a disk hit the real data is re-read in the background at most every 15s (session history is append-only), so new turns appear within ~15s.
+- After a disk hit the real data is re-read in the background (show first, fine-tune later); new turns appear within ~15s.
+- **Robustness (v0.2.1)**: writes are write-verify-swap with a sha256 checksum — the live cache is never half-written, a crash leaves only a harmless `.tmp-*` leftover swept at startup; corrupted/tampered/truncated/old-format files are detected and rebuilt; background refresh is gated by ≥5s of continuous stay plus the 15s gap, single-flight.
 
 ## Usage
 
@@ -158,6 +159,15 @@ Flags: `-n` dry-run, `-p PID` target process, `-l FILE` log path (default `/tmp/
 </details>
 
 ## Changelog
+
+Full history is kept in [CHANGELOG.md](CHANGELOG.md).
+
+### v0.2.1
+
+- **Hardened cache**: disk cache entries carry a sha256 checksum; writes are write-verify-swap (temp file → read-back verification → atomic rename), so a process dying mid-write can never corrupt the live cache; corrupted/tampered/truncated/old-format files are detected, deleted and rebuilt; startup sweeps `.tmp-*` leftovers.
+- **Refresh gating**: background re-reads only fire after the session has been continuously requested for ≥5s and 15s since the last real read (quick session-hopping never touches the disk), single-flight.
+- **Theme following**: the tooltip and the whole rail now color via the host's `--dsw-alias-*` theme variables — manual theme switches, auto-dark and third-party skins recolor it instantly, in sync with the rest of the page (old dark-attribute override removed).
+- Verified (stress test A, full run): all 12 sessions reach "lines rendered + blue line centered" within 1s (three large sessions previously 3–6s now 286–455ms), zero failures.
 
 ### v0.2.0
 

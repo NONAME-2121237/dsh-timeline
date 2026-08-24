@@ -33,6 +33,7 @@ const files = [
   'restart-dsh-web.sh',
   'README.md',
   'README.en.md',
+  'CHANGELOG.md',
   'LICENSE',
   'LICENSE-MIT',
   'NOTICE.md',
