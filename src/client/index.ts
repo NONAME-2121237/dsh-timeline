@@ -157,7 +157,9 @@ function TimelineOverlay(props: HistoryDockProps & {
   const MAX_EXT = 30 // 悬停线条向左延长的最大像素数
   const VIEW_W = LINE_W + MAX_EXT // 视口宽 = 基准 + 最大延长，悬停伸长不截断
   const EXT_RADIUS = 3 // 延长作用半径：距悬停线几根以内按抛物线衰减
-  const HEXT_RADIUS = 32 // 水平延长的有效半径：光标与线基段的水平距离超过此值不再延长
+  const HEXT_SAT = 20 // 水平饱和距离：光标距延长前基段中点 ≤20px 即达最大长度
+  const HEXT_RADIUS = 30 // 水平有效半径：距中点 30px（= HEXT_SAT + 10，检查放远）以外不延长
+  const EXT_PHASE = 1.35 // 正切相位：远段增长慢、贴近后急速拉满
   const HOVER_KEEP_RANGE = 100 // 光标保护区：离开轨道后仍保持延长/高亮的范围
   const WHEEL_HOLD_MS = 1200 // 滚轮滚轨道后的抑制窗口：期间”跟随 active”不触发回弹
   const HOVER_LEAVE_MS = 400 // 移出保护区后等待多久才允许回弹（给鼠标一个缓冲期）
@@ -523,22 +525,25 @@ function TimelineOverlay(props: HistoryDockProps & {
     ? clamp(Math.round((cursorYRef.current - 5 + off) / LINE_STEP), 0, Math.max(0, count - 1))
     : null
 
-  // 悬停延长轮廓由「水平距离分量」驱动（替代固定拉满）：光标离线基段越近，
-  // 悬停中心线越长，距离超过 HEXT_RADIUS 就不延长；相邻线仍按抛物线
-  // (1-(d/r)²) 衰减，整体保持平滑的抛物线突起。宽度写在 inline style 上，
-  // 由 CSS 的 width transition 补齐动画。
+  // 悬停延长轮廓由「水平距离分量」驱动（替代固定拉满）：以延长前基段的中点为
+  // 参照——光标距中点 ≤ HEXT_SAT 时即达最大长度（继续靠近不再加长），距中点
+  // ≥ HEXT_RADIUS 不延长；中间按正切曲线过渡，较远时增长缓慢，接近后急速
+  // 拉满。相邻线仍按抛物线 (1-(d/r)²) 衰减，整体保持平滑的抛物线突起。
   const railRightX = pos === null ? -1 : window.innerWidth - pos.right
-  const baseLeftX = railRightX - LINE_W
+  const midX = railRightX - LINE_W / 2 // 延长前基段的中点
+  const extAmp = (u: number): number => {
+    if (u <= 0) return 0
+    if (u >= 1) return 1
+    return Math.tan(EXT_PHASE * u) / Math.tan(EXT_PHASE)
+  }
   const extOf = (idx: number): number => {
     if (hoveredIndex === null || railRightX < 0) return 0
     const d = Math.abs(idx - hoveredIndex)
     if (d > EXT_RADIUS) return 0
     const hx = hoverXRef.current
-    // 到线基段 [baseLeftX, railRightX] 的水平距离（左右对称；在段上为 0）。
-    const hd = hx < 0 ? 0 : Math.max(0, baseLeftX - hx, hx - railRightX)
-    const t = Math.min(1, hd / HEXT_RADIUS)
-    const amp = MAX_EXT * (1 - t) * (1 - t)
-    return (1 - (d / EXT_RADIUS) ** 2) * amp
+    const hd = hx < 0 ? 0 : Math.abs(hx - midX)
+    const u = (HEXT_RADIUS - hd) / (HEXT_RADIUS - HEXT_SAT)
+    return (1 - (d / EXT_RADIUS) ** 2) * MAX_EXT * extAmp(u)
   }
 
   // 只渲染视口 ± BUFFER 根线，绝对定位在各自槽位；整条胶片由 translateY(-off)
