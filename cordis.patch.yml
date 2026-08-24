@@ -1,12 +1,12 @@
-# dsh-history bundle patch
+# dsh-timeline bundle patch
 #
 # This file is the `dsh.bundle.patch` layer of the published npm package: when
 # the plugin is installed through the official CLI —
 #
-#   dsh plugin --profile <name> add dsh-history@<version>
+#   dsh plugin --profile <name> add dsh-timeline@<version>
 #
 # — the command reconciles `dsh.profile.bundles` against installed packages
-# and, seeing this declaration, appends `dsh-history` to the bundle stack.
+# and, seeing this declaration, appends `dsh-timeline` to the bundle stack.
 # The profile boot then merges THIS patch (a single `insert` of the plugin
 # row) exactly like a manual cordis.patch.yml mount line. No profile file
 # edits needed — one command installs and mounts.
@@ -15,5 +15,5 @@
 # cordis.patch.yml, remove it before switching to the bundle channel to
 # avoid double-mounting (two Node halves, two docks).
 - insert:
-    - id: dsh-history
-      name: 'dsh-history'
+    - id: dsh-timeline
+      name: 'dsh-timeline'

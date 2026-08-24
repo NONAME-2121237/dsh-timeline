@@ -1,11 +1,11 @@
 /**
- * tsdown build for dsh-history:
+ * tsdown build for dsh-timeline:
  *
  * - `lib/index.js` — the host half (ESM node): one fenced HTTP route
  *   `/history/api` that reads the full session log through `sessionQuery`
  *   and returns every `user/message` event the human sent.
  * - `lib/client.js` — the browser client bundle (CJS closure factory),
- *   registering with the package-name id `dsh-history` (the client-modules
+ *   registering with the package-name id `dsh-timeline` (the client-modules
  *   compose keys on the package name; keep it in sync with package.json
  *   `name`). Externals resolve through the web shell's module table
  *   (react, cordis, ui-slots, ...); everything else is inlined. The bundle
@@ -55,9 +55,9 @@ const hostConfig: UserConfig = {
 /**
  * One client bundle build for a plugin id. The same src/client/index.ts is
  * compiled twice with only the registered id and the output file name
- * differing: the npm/GitHub channel uses the package name (`dsh-history`)
+ * differing: the npm/GitHub channel uses the package name (`dsh-timeline`)
  * and the plugin-registry channel uses the manifest id
- * (`dsh-external/dsh-history`).
+ * (`dsh-external/dsh-timeline`).
  * @param pluginId - the `__ModuleLoader__.load({ id })` value of this bundle.
  * @param entryFile - the output file name under lib/.
  */
@@ -105,6 +105,6 @@ function clientBundle(pluginId: string, entryFile: string): UserConfig {
 
 export default [
   hostConfig,
-  clientBundle('dsh-history', 'client.js'),
-  clientBundle('dsh-external/dsh-history', 'client-registry.js'),
+  clientBundle('dsh-timeline', 'client.js'),
+  clientBundle('dsh-external/dsh-timeline', 'client-registry.js'),
 ]

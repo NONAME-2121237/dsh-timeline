@@ -1,11 +1,11 @@
 {
-  "name": "dsh-history",
-  "version": "0.1.24",
-  "description": "Quickly view, search, and jump to all the messages you sent in a long conversation.",
+  "name": "dsh-timeline",
+  "version": "0.2.0",
+  "description": "Interaction timeline rail for DSH web: browse, search and jump across every turn of a long conversation.",
   "type": "module",
   "repository": {
     "type": "git",
-    "url": "https://github.com/chenproton/dsh-history"
+    "url": "https://github.com/NONAME-2121237/dsh-timeline"
   },
   "publishConfig": {
     "access": "public"
@@ -51,7 +51,9 @@
     "dsh.plugin.json",
     "README.md",
     "README.en.md",
-    "LICENSE"
+    "LICENSE",
+    "LICENSE-MIT",
+    "NOTICE.md"
   ],
   "scripts": {
     "build": "rm -rf lib && tsc -p tsconfig.build.json && tsdown --config-loader tsx",
@@ -59,7 +61,7 @@
     "typecheck": "tsc --noEmit",
     "bundle": "tsdown --config-loader tsx"
   },
-  "license": "MIT",
+  "license": "SEE LICENSE IN LICENSE",
   "peerDependencies": {
     "@deepseek-ai/cordis": "^4.0.1",
     "@deepseek-ai/dsh-client-runtime": ">=0.0.1-rc.1 <0.1.0 || >=0.1.0-rc.1 <0.2.0-0",

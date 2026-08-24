@@ -6,7 +6,7 @@
  *   pnpm build
  *   node scripts/package-registry.mjs
  *   dsh registry install ./registry
- *   dsh registry enable dsh-external/dsh-history
+ *   dsh registry enable dsh-external/dsh-timeline
  *
  * The registry install copies the whole source directory (`cp -r`), so
  * installing the repo root would drag in `node_modules/` and `.git/`. This
@@ -34,6 +34,8 @@ const files = [
   'README.md',
   'README.en.md',
   'LICENSE',
+  'LICENSE-MIT',
+  'NOTICE.md',
 ]
 
 rmSync(out, { recursive: true, force: true })
@@ -49,4 +51,4 @@ for (const file of files) {
   cpSync(source, target)
 }
 console.log(`registry/ assembled (${files.length} files)`)
-console.log('next: dsh registry install ./registry && dsh registry enable dsh-external/dsh-history')
+console.log('next: dsh registry install ./registry && dsh registry enable dsh-external/dsh-timeline')

@@ -1,5 +1,5 @@
 /**
- * dsh-history client half: the interaction-turn timeline rail on the right
+ * dsh-timeline client half: the interaction-turn timeline rail on the right
  * edge of the message area (spec F2-F5). One short tick per turn; the
  * active turn is highlighted and centered, clamped at the ends.
  *

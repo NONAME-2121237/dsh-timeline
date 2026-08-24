@@ -1,8 +1,8 @@
 {
-  "id": "dsh-external/dsh-history",
-  "version": "0.1.24",
+  "id": "dsh-external/dsh-timeline",
+  "version": "0.2.0",
   "main": "./lib/index.mjs",
-  "description": "Quickly view, search, and jump to all the messages you sent in a long conversation.",
+  "description": "Interaction timeline rail for DSH web: browse, search and jump across every turn of a long conversation.",
   "engines": {
     "dsh": ">=0.0.1"
   },

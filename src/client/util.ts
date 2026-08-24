@@ -1,5 +1,5 @@
 /**
- * Pure helpers for the dsh-history client half. No React, no plugin services —
+ * Pure helpers for the dsh-timeline client half. No React, no plugin services —
  * only thin DOM/browser helpers and data transforms. Kept in one file so the
  * component (index.ts) stays focused on rendering and state, and so utility
  * logic is testable in isolation.
@@ -158,18 +158,42 @@ export function findAnchor(key: string): HTMLElement | null {
  *  `scroll-behavior` CSS; the jump must stay fast (≈200ms) yet visible.
  *  Returns false when the target equals the current position. */
 function animateScroll(port: HTMLElement, target: number, duration = 200): boolean {
+  if (Math.abs(target - port.scrollTop) < 1) return false
+  let raf = 0
   const start = port.scrollTop
   const delta = target - start
-  if (Math.abs(delta) < 1) return false
   const t0 = performance.now()
   const ease = (t: number): number => 1 - Math.pow(1 - t, 3)
   const step = (now: number): void => {
     const p = Math.min(1, (now - t0) / duration)
     port.scrollTop = start + delta * ease(p)
-    if (p < 1) requestAnimationFrame(step)
+    if (p < 1) raf = requestAnimationFrame(step)
   }
-  requestAnimationFrame(step)
+  raf = requestAnimationFrame(step)
   return true
+}
+
+/** Drive the scrollport partway toward `target` while older history is still
+ *  loading.  Clicking an unloaded turn scrolls up now so the motion starts
+ *  immediately; each `loadOlder` page prepends above the top, so pinning
+ *  toward the top keeps every newly loaded page entering the viewport and
+ *  the view approaches the target before the exact jump lands.  Returns a
+ *  cancel callback (the precise landing jump should stop this motion first,
+ *  otherwise both rAF loops would fight over scrollTop). */
+export function chaseScroll(port: HTMLElement, target: number, duration = 750): () => void {
+  if (Math.abs(target - port.scrollTop) < 1) return () => {}
+  let raf = 0
+  const start = port.scrollTop
+  const delta = target - start
+  const t0 = performance.now()
+  const ease = (t: number): number => 1 - Math.pow(1 - t, 3)
+  const step = (now: number): void => {
+    const p = Math.min(1, (now - t0) / duration)
+    port.scrollTop = start + delta * ease(p)
+    if (p < 1) raf = requestAnimationFrame(step)
+  }
+  raf = requestAnimationFrame(step)
+  return () => cancelAnimationFrame(raf)
 }
 
 /** Scroll a message row into view (top-aligned) and flash-highlight it.

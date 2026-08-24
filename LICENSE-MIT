@@ -1,0 +1,34 @@
+MIT License
+
+Copyright (c) 2025 chenproton
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+---
+
+This file preserves the original license of the upstream project
+[dsh-history](https://github.com/chenproton/dsh-history), from which this
+repository is derived (see NOTICE.md). The code portions that originate from
+that project remain licensed under this MIT License, as required by its
+terms. New code added in dsh-timeline is licensed under the custom
+non-commercial license in LICENSE.
+
+本文件保留上游项目 dsh-history 的原始许可。源自该项目的代码部分仍按本 MIT
+许可授权（正如其许可条款所要求）；dsh-timeline 新增代码按 LICENSE 中的定制
+非商用许可授权。

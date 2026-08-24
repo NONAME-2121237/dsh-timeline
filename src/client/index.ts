@@ -1,5 +1,5 @@
 /**
- * dsh-history client half: the interaction-turn timeline rail on the right
+ * dsh-timeline client half: the interaction-turn timeline rail on the right
  * edge of the message area (spec F2-F5). One short tick per turn; the
  * active turn is highlighted and centered, clamped at the ends.
  *
@@ -14,6 +14,7 @@ import type { Context } from 'cordis'
 import {
   type HistoryConversationSnapshot,
   type TurnItem,
+  chaseScroll,
   clamp,
   collectWindowItems,
   findAnchor,
@@ -66,10 +67,10 @@ declare module 'cordis' {
 /** Inject the plugin stylesheet once per activation (removed on disposal). */
 function injectStyles(): () => void {
   if (typeof document === 'undefined') return () => {}
-  if (document.querySelector('style[data-plugin-css="dsh-history/styles"]') !== null) return () => {}
+  if (document.querySelector('style[data-plugin-css="dsh-timeline/styles"]') !== null) return () => {}
   const tag = document.createElement('style')
-  tag.dataset.plugin = 'dsh-history'
-  tag.dataset.pluginCss = 'dsh-history/styles'
+  tag.dataset.plugin = 'dsh-timeline'
+  tag.dataset.pluginCss = 'dsh-timeline/styles'
   tag.textContent = TIMELINE_CSS
   document.head.appendChild(tag)
   return () => {
@@ -82,23 +83,30 @@ function injectStyles(): () => void {
 /**
  * 交互时间线 (spec F2-F5): 消息区右缘的轮次刻度轨道。
  * - 一根线 = 用户发出一次消息 (一个轮次); 最新轮次在底部 (正序)。
- * - 最多显示 10 根, 轨道内等距; 窗口外的线不渲染, 上下边缘以渐变淡出。
+ * - 胶片式视口: 固定高度容器（约 10 根线的容量），线条在容器内做像素级
+ *   translateY 滑动, 超出视口的线条以渐变淡出 —— 滚轮滚动时能看到线条
+ *   连续经过视口, 而不是整窗跳格。
  * - 当前视口最近的轮次高亮为蓝色; 历史为白色。
  * - 悬停: tooltip 预览 (第 N 轮 / 时间 / 用户消息 / 回复 + 工具数), 自动翻转防溢出。
  * - 点击: 滚动到该轮用户消息, 线条短暂高亮。
- * - 滚轮: 悬停轨道时滚动线条窗口; 移开后回弹到最近消息居中。
+ * - 滚轮: 悬停轨道时连续滚动线条胶片; 移开后不自动回弹, 保持当前偏移。
  */
 const TIMELINE_CSS = `
 .dsht_root{position:fixed;z-index:9980;pointer-events:auto;user-select:none;-webkit-font-smoothing:antialiased}
-.dsht_track{position:relative;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;padding:6px 4px;
+.dsht_view{position:relative;height:180px;width:64px;overflow:hidden;pointer-events:auto;
   -webkit-mask-image:linear-gradient(to bottom,transparent 0,rgba(0,0,0,.85) 12%,#000 30%,#000 70%,rgba(0,0,0,.85) 88%,transparent 100%);
   mask-image:linear-gradient(to bottom,transparent 0,rgba(0,0,0,.85) 12%,#000 30%,#000 70%,rgba(0,0,0,.85) 88%,transparent 100%)}
-.dsht_line{position:relative;display:flex;align-items:center;justify-content:center;cursor:pointer;width:34px;height:3px;flex:0 0 auto;padding:6px 0}
-.dsht_bar{width:26px;height:3px;border-radius:2px;background:var(--dsw-alias-label-caption, rgba(120,130,150,.55));opacity:.45;transition:background .15s ease,opacity .15s ease,transform .15s ease,box-shadow .15s ease}
-.dsht_line:hover .dsht_bar{opacity:.9;transform:scaleX(1.2)}
+.dsht_strip{position:absolute;left:0;right:0;top:0;will-change:transform}
+.dsht_line{position:absolute;right:0;display:flex;align-items:center;justify-content:flex-end;cursor:pointer;width:34px;height:3px;pointer-events:auto;top:0}
+.dsht_bar{height:3px;border-radius:3px;background:var(--dsw-alias-label-caption, rgba(120,130,150,.55));opacity:.45;transform-origin:100% 50%;
+  transition:background .15s ease,opacity .15s ease,width .18s cubic-bezier(.22,.61,.36,1),box-shadow .15s ease}
+.dsht_line:hover .dsht_bar{opacity:.9}
 .dsht_active .dsht_bar{background:var(--dsw-alias-state-business-primary, #3b82f6);opacity:1;box-shadow:0 0 6px var(--dsw-alias-state-business-primary, #3b82f6)}
 .dsht_flash .dsht_bar{animation:dshtFlashBar 1.6s ease-out}
 @keyframes dshtFlashBar{0%,30%{background:var(--dsw-alias-state-business-primary, #3b82f6);opacity:1;box-shadow:0 0 10px var(--dsw-alias-state-business-primary, #3b82f6)}100%{opacity:.45;box-shadow:none}}
+/* 跳转落地闪烁（src/client/util.ts scrollToKey 的 dshm-flash 类）：消息行软色块脉冲，由 animationend 清理。 */
+.dshm-flash{animation:dshmRowFlash 1.1s ease-out}
+@keyframes dshmRowFlash{0%,35%{background:rgba(59,130,246,.18);box-shadow:inset 0 0 0 1px rgba(59,130,246,.35)}100%{background:rgba(59,130,246,0);box-shadow:none}}
 .dsht_tip{position:fixed;z-index:9999;max-width:min(340px,calc(100vw - 24px));border-radius:12px;padding:10px 12px;font-size:12px;line-height:1.55;
   background:rgba(255,255,255,.92);-webkit-backdrop-filter:blur(16px) saturate(1.4);backdrop-filter:blur(16px) saturate(1.4);
   border:1px solid rgba(120,130,150,.28);box-shadow:0 10px 32px rgba(0,0,0,.14);color:#1f2937;pointer-events:none}
@@ -119,20 +127,21 @@ function TimelineOverlay(props: HistoryDockProps & {
   const session = props.session
   const sessionId = session?.sessionId
   const [turns, setTurns] = useState<TurnItem[]>([])
-  const [winStart, setWinStart] = useState(0)
-  const [hoverIdx, setHoverIdx] = useState<number | null>(null)
+  /** 胶片在视口内的像素偏移：0 = 最旧对齐视口顶，maxOff = 最新贴底。 */
+  const [off, setOff] = useState(0)
   const [activeSeq, setActiveSeq] = useState<number | null>(null)
   const [flashSeq, setFlashSeq] = useState<number | null>(null)
   /** 点击跳到未加载轮次时的"追逐"状态：持续 loadOlder 直到目标轮次进入已加载窗口。 */
   const [chase, setChase] = useState<{ seq: number; loads: number } | null>(null)
   const chaseRef = useRef(chase)
   chaseRef.current = chase
+  /** 追逐加载期间的滚动动画句柄：落地精确跳转前先取消，避免两个 rAF 循环抢 scrollTop。 */
+  const chaseAnimRef = useRef<(() => void) | null>(null)
   const [pos, setPos] = useState<{ top: number; right: number } | null>(null)
-  const [tip, setTip] = useState<{ turn: TurnItem; index: number; at: number } | null>(null)
   const rootRef = useRef<HTMLDivElement | null>(null)
   const portRef = useRef<HTMLElement | null>(null)
-  const winStartRef = useRef(winStart)
-  winStartRef.current = winStart
+  const offRef = useRef(off)
+  offRef.current = off
   const turnsRef = useRef(turns)
   turnsRef.current = turns
   // DOM-derived turn-number → anchor key map: rows carry keys like
@@ -141,10 +150,23 @@ function TimelineOverlay(props: HistoryDockProps & {
   // falls back to this map when the loaded-window seq map misses the turn.
   const domTurnRef = useRef(new Map<number, string>())
 
-  const VISIBLE = 10
+  const VISIBLE = 10 // 视口约容纳的线条数
+  const LINE_STEP = 18 // 单根线条的槽高：3px 条 + 2×5px padding + 5px 间距（紧凑）
+  const VIEW_H = VISIBLE * LINE_STEP // 180px——与 CSS 中 .dsht_view 的 height 同步
+  const LINE_W = 17 // 线条基准宽（为原 34px 的一半，右侧对齐，右缘贴轨道边）
+  const MAX_EXT = 30 // 悬停线条向左延长的最大像素数
+  const VIEW_W = LINE_W + MAX_EXT // 视口宽 = 基准 + 最大延长，悬停伸长不截断
+  const EXT_RADIUS = 3 // 延长作用半径：距悬停线几根以内按抛物线衰减
+  const HOVER_KEEP_RANGE = 100 // 光标保护区：离开轨道后仍保持延长/高亮的范围
+  const WHEEL_HOLD_MS = 1200 // 滚轮滚轨道后的抑制窗口：期间”跟随 active”不触发回弹
+  const HOVER_LEAVE_MS = 400 // 移出保护区后等待多久才允许回弹（给鼠标一个缓冲期）
+  const BUFFER = 2 // 视口上下各多渲染 BUFFER 根，滑动时不出现空白
   // 追逐跳转的保险上限（loadOlder 每次最多拉 50 条事件，一条轮次至少需要
   // 1 条 user/message 事件，24 次 ≈ 1200 条；正常会话远达不到，防御性封顶）。
   const CHASE_MAX_LOADS = 24
+  /** 胶片滑动目标偏移 + 惯性动画的 rAF 句柄（滚轮与"跟随 active"共用）。 */
+  const targetRef = useRef(0)
+  const glideRafRef = useRef(0)
 
   // seq → anchor key map from the loaded window (for click-jump).
   const keys = useMemo(() => collectWindowItems(session).keys, [session])
@@ -162,7 +184,8 @@ function TimelineOverlay(props: HistoryDockProps & {
     if (sessionId === undefined) return
     let cancelled = false
     setActiveSeq(null)
-    setWinStart(0)
+    setOff(0)
+    targetRef.current = 0
     const load = (): void => {
       fetch('/history/api/list-turns', {
         method: 'POST',
@@ -307,38 +330,67 @@ function TimelineOverlay(props: HistoryDockProps & {
     }
   }, [seqByKey])
 
-  // 窗口始终以 active 轮为中心（clamp 到窗口两端，靠近首/尾时不再居中，
-  // 保证不出现空滑/空白）。
-  useEffect(() => {
-    const list = turnsRef.current
-    if (list.length === 0) return
-    const activeIdx = activeSeq === null ? list.length - 1 : list.findIndex((t) => t.seq === activeSeq)
-    const idx = activeIdx === -1 ? list.length - 1 : activeIdx
-    const maxStart = Math.max(0, list.length - VISIBLE)
-    const want = clamp(idx - Math.floor(VISIBLE / 2), 0, maxStart)
-    if (winStartRef.current !== want) {
-      setWinStart(want)
-    }
-  }, [activeSeq, turns])
-
+  // 胶片几何：总长 / 最大偏移 / 视口内需要渲染的线。off 是视口顶相对胶片
+  // 顶的像素距离；滚轮与“跟随 active”都只写 targetRef，由同一个 glide 循环
+  // 滑到目标，互不打断，运动是像素级连续的。
   const count = turns.length
-  const maxStart = Math.max(0, count - VISIBLE)
-  const shown = turns.slice(winStart, winStart + VISIBLE)
+  const maxOff = Math.max(0, count * LINE_STEP - VIEW_H)
+  const lastIdxAll = Math.max(0, count - 1)
+  const firstIdx = clamp(Math.floor(off / LINE_STEP) - BUFFER, 0, lastIdxAll)
+  const lastIdx = clamp(Math.ceil((off + VIEW_H) / LINE_STEP) + BUFFER - 1, 0, lastIdxAll)
   const activeIdx = activeSeq === null ? -1 : turns.findIndex((t) => t.seq === activeSeq)
-  const activeInWindow = activeIdx >= winStart && activeIdx < winStart + VISIBLE
+  const activeInWindow = activeIdx >= firstIdx && activeIdx <= lastIdx
+
+  const glide = (): void => {
+    const cur = offRef.current
+    const target = clamp(targetRef.current, 0, Math.max(0, turnsRef.current.length * LINE_STEP - VIEW_H))
+    if (Math.abs(target - cur) < 0.5) {
+      if (cur !== target) setOff(target)
+      glideRafRef.current = 0
+      return
+    }
+    const next = cur + (target - cur) * 0.3
+    setOff(next)
+    glideRafRef.current = requestAnimationFrame(glide)
+  }
+
+  const glideTo = (target: number): void => {
+    targetRef.current = target
+    if (glideRafRef.current === 0) glideRafRef.current = requestAnimationFrame(glide)
+  }
+
+  // 跟踪高亮线：active 不在视口窗口内（含缓冲）时，把胶片带回让活跃线落在
+  // 视口 42% 处。active/count 变化时立即检查，另每 600ms 周期复查一次（保证
+  // 停手后也会自动回到居中状态）。回弹让位给用户的三道闸：
+  // - 滚轮滚轨道后的 WHEEL_HOLD_MS 内强制跳过（滚轨道时绝不回弹）；
+  // - 光标仍在保护区（hoverZoneRef）时跳过（鼠标停着不弹）；
+  // - 移出保护区后还要再等 HOVER_LEAVE_MS 才允许回弹（移开也有缓冲期）。
+  useEffect(() => {
+    const follow = (): void => {
+      if (performance.now() - wheelAtRef.current < WHEEL_HOLD_MS) return
+      if (hoverZoneRef.current) return
+      if (performance.now() - leaveAtRef.current < HOVER_LEAVE_MS) return
+      const list = turnsRef.current
+      if (list.length === 0 || activeSeq === null) return
+      const idx = list.findIndex((t) => t.seq === activeSeq)
+      if (idx === -1) return
+      const cur = offRef.current
+      const lineTop = idx * LINE_STEP
+      if (lineTop >= cur - BUFFER * LINE_STEP && lineTop < cur + VIEW_H + BUFFER * LINE_STEP) return
+      glideTo(clamp(idx * LINE_STEP - VIEW_H * 0.42, 0, Math.max(0, list.length * LINE_STEP - VIEW_H)))
+    }
+    follow()
+    const timer = setInterval(follow, 600)
+    return () => clearInterval(timer)
+  }, [activeSeq, count])
 
   const handleWheel = (e: { deltaY: number; preventDefault(): void }): void => {
     e.preventDefault()
-    const step = e.deltaY > 0 ? 1 : -1
-    setWinStart((s) => clamp(s + step, 0, maxStart))
-  }
-
-  const recenter = (): void => {
-    const list = turnsRef.current
-    if (list.length === 0) return
-    const idx = activeSeq === null ? list.length - 1 : Math.max(0, list.findIndex((t) => t.seq === activeSeq))
-    const i = idx === -1 ? list.length - 1 : idx
-    setWinStart(clamp(i - Math.floor(VISIBLE / 2), 0, Math.max(0, list.length - VISIBLE)))
+    wheelAtRef.current = performance.now()
+    // 与原生滚轮方向一致：向下滚动胶片朝最新的方向走（视口顶向最新偏移）。
+    const delta = e.deltaY * 0.25
+    if (Math.abs(delta) < 2) return
+    glideTo(clamp(offRef.current + delta, 0, maxOff))
   }
 
   const flashTurn = (turn: TurnItem): void => {
@@ -350,13 +402,27 @@ function TimelineOverlay(props: HistoryDockProps & {
     }
   }
 
+  /** 点击“未加载”轮次：不等加载完成 —— 立即给反馈。闪烁所点线条（纯线条
+   *  脉冲，不移动窗口），同时马上向顶部方向滚动（更早历史从内容顶部前置
+   *  进来，scrollTop 锁定在顶部附近时每一页新拉到的轮次都会顶上视口，加载
+   *  完差不多已就位），再启动追逐加载；落地后由 chase effect 做最后的精确
+   *  对齐。特意不把 activeSeq 直接设到目标上：那会让轨道窗口先行“自动对齐”
+   *  到所点轮次再弹回，页面滚动时时间线反而不像在连续滚动。 */
+  const startChase = (turn: TurnItem): void => {
+    flashTurn(turn)
+    const port = portRef.current
+    if (port !== null && port.getBoundingClientRect().height > 0) {
+      chaseAnimRef.current?.()
+      chaseAnimRef.current = chaseScroll(port, 0)
+    }
+    setChase({ seq: turn.seq, loads: 1 })
+  }
+
   const jumpToTurn = (turn: TurnItem): void => {
     const idx = turnsRef.current.findIndex((t) => t.seq === turn.seq)
     const key = keys.get(turn.seq) ?? domTurnRef.current.get(idx)
     if (key === null || key === undefined) {
-      // 该轮用户消息不在已加载窗口内：启动追逐，持续加载更早历史直到
-      // 目标轮次进入窗口（chase effect 驱动），而不是只加载一次。
-      setChase({ seq: turn.seq, loads: 1 })
+      startChase(turn)
       return
     }
     if (findAnchor(key) !== null) scrollToKey(key)
@@ -377,6 +443,9 @@ function TimelineOverlay(props: HistoryDockProps & {
     }
     const key = keys.get(turn.seq)
     if (key !== undefined) {
+      // 目标已进入已加载窗口：先停掉追逐滚动，再做精确对齐。
+      chaseAnimRef.current?.()
+      chaseAnimRef.current = null
       setChase(null)
       if (findAnchor(key) !== null) scrollToKey(key)
       flashTurn(turn)
@@ -396,46 +465,127 @@ function TimelineOverlay(props: HistoryDockProps & {
     setChase({ seq: chase.seq, loads: chase.loads + 1 })
   }, [chase, keys, session])
 
+  /** 光标视口相对 y（在轨道内/保护区内时有效，-1 表示不在保护区）。 */
+  const cursorYRef = useRef(-1)
+  /** 光标是否处于「轨道内或 HOVER_KEEP_RANGE 保护区」中。 */
+  const hoverZoneRef = useRef(false)
+  /** 滚轮滚轨道时的最近时间戳：跟随回弹让位给用户（见 WHEEL_HOLD_MS 抑制）。 */
+  const wheelAtRef = useRef(0)
+  /** 离开保护区的时间戳：移开鼠标后等待几百毫秒才允许回弹。 */
+  const leaveAtRef = useRef(0)
+  const viewElRef = useRef<HTMLDivElement | null>(null)
+  // 悬停驱动改为“渲染期推导”：每帧渲染用光标实时位置 + 当前 off 反查最近
+  // 轮次。滚轮滚动胶片时 off 在变，延长中心随之动态跟进，不再停在最后一次
+  // mousemove 的旧线上。光标移动本身只触发重渲染（hoverTick 自增），不存
+  // 推导结果。
+  const [hoverTick, setHoverTick] = useState(0)
+  const zoneOf = (e: { clientX: number; clientY: number }): 'in' | 'near' | 'out' => {
+    const el = viewElRef.current
+    if (el === null) return 'out'
+    const rect = el.getBoundingClientRect()
+    if (rect.width === 0 || rect.height === 0) return 'out'
+    if (e.clientX >= rect.left && e.clientX <= rect.right
+      && e.clientY >= rect.top && e.clientY <= rect.bottom) return 'in'
+    if (e.clientX >= rect.left - HOVER_KEEP_RANGE && e.clientX <= rect.right + HOVER_KEEP_RANGE
+      && e.clientY >= rect.top - HOVER_KEEP_RANGE && e.clientY <= rect.bottom + HOVER_KEEP_RANGE) return 'near'
+    return 'out'
+  }
+
+  // 全局追踪光标：更新 cursorYRef / hoverZoneRef，并按区域状态变化触发重渲染。
+  // 轨道外保留 HOVER_KEEP_RANGE 保护区——光标稍有偏移时延长与 tooltip 不缩回。
+  useEffect(() => {
+    const onMove = (e: { clientX: number; clientY: number }): void => {
+      const zone = zoneOf(e)
+      if (zone === 'out') {
+        if (hoverZoneRef.current) leaveAtRef.current = performance.now()
+        hoverZoneRef.current = false
+        setHoverTick((t) => t + 1)
+        return
+      }
+      const el = viewElRef.current
+      if (el !== null) {
+        const rect = el.getBoundingClientRect()
+        cursorYRef.current = rect.height > 0 ? Math.max(0, Math.min(rect.height - 1, e.clientY - rect.top)) : -1
+      }
+      hoverZoneRef.current = true
+      setHoverTick((t) => t + 1)
+    }
+    document.addEventListener('mousemove', onMove)
+    return () => document.removeEventListener('mousemove', onMove)
+  }, [])
+
+  // 渲染期推导的悬停线索引：光标在保护区内且有 y 时才有效。
+  const hoveredIndex = hoverZoneRef.current && cursorYRef.current >= 0
+    ? clamp(Math.round((cursorYRef.current - 5 + off) / LINE_STEP), 0, Math.max(0, count - 1))
+    : null
+
+  // 悬停延长轮廓：鼠标所指的线最长，相邻线按抛物线 (1-(d/r)²) 平滑衰减，
+  // 半径外不动。宽度写在 inline style 上，由 CSS 的 width transition 补齐动画。
+  const extOf = (idx: number): number => {
+    if (hoveredIndex === null) return 0
+    const d = Math.abs(idx - hoveredIndex)
+    if (d > EXT_RADIUS) return 0
+    return (1 - (d / EXT_RADIUS) ** 2) * MAX_EXT
+  }
+
+  // 只渲染视口 ± BUFFER 根线，绝对定位在各自槽位；整条胶片由 translateY(-off)
+  // 驱动，滑动连续可见，超出视口的线被 .dsht_view 的边缘遮罩淡出。
   const lineNodes: ReactElement[] = []
-  for (let i = 0; i < shown.length; i++) {
-    const turn = shown[i]
-    const idx = winStart + i
+  for (let idx = firstIdx; idx <= lastIdx; idx++) {
+    const turn = turns[idx]
+    if (turn === undefined) continue
     const isActive = activeIdx === idx
     const isFlash = flashSeq === turn.seq
     lineNodes.push(createElement('div', {
       key: `t${turn.seq}`,
       className: `dsht_line${isActive ? ' dsht_active' : ''}${isFlash ? ' dsht_flash' : ''}`,
+      style: { top: `${idx * LINE_STEP + 5}px`, width: `${LINE_W + extOf(idx)}px` },
       'aria-label': `第 ${idx + 1} 轮`,
-      onMouseEnter: () => { setHoverIdx(idx); setTip({ turn, index: idx, at: Date.now() }) },
-      onMouseLeave: () => { setHoverIdx(null); setTip(null) },
-      onClick: () => jumpToTurn(turn),
-    }, createElement('span', { className: 'dsht_bar' })))
+    }, createElement('span', { className: 'dsht_bar', style: { width: `${LINE_W + extOf(idx)}px` } })))
   }
 
   const children: ReactElement[] = [
     createElement('div', {
-      key: 'track',
-      className: 'dsht_track',
+      key: 'view',
+      ref: viewElRef,
+      className: 'dsht_view',
+      style: { height: `${VIEW_H}px`, width: `${VIEW_W}px` },
       onWheel: handleWheel,
-      onMouseLeave: () => { recenter(); setHoverIdx(null); setTip(null) },
-    }, lineNodes),
+      onClick: () => {
+        const hovered = hoveredIndex
+        const list = turnsRef.current
+        if (hovered !== null && list[hovered] !== undefined) jumpToTurn(list[hovered])
+      },
+    }, [
+      createElement('div', {
+        key: 'strip',
+        className: 'dsht_strip',
+        style: { transform: `translateY(-${off}px)` },
+      }, lineNodes),
+    ]),
   ]
 
-  // Tooltip: render once per hovered line; auto-flip so it never leaves the viewport.
+  // Tooltip: 跟随渲染期推导的悬停线（滚动时随胶片动态切换线内容）;
+  // auto-flip 保证不超出视口，并贴着延长后线条外沿留 16px，不被线条覆盖。
   let tipNode: ReactElement | null = null
-  if (tip !== null && hoverIdx === tip.index) {
-    const n = tip.index + 1
-    const attach = tip.turn.userAttachments > 0 ? `（含 ${tip.turn.userAttachments} 张图片/附件）` : ''
-    const tools = tip.turn.toolCalls > 0 ? `\n调用了 ${tip.turn.toolCalls} 次工具` : ''
+  if (hoveredIndex !== null && turns[hoveredIndex] !== undefined) {
+    const turn = turns[hoveredIndex]
+    const n = hoveredIndex + 1
+    const attach = turn.userAttachments > 0 ? `（含 ${turn.userAttachments} 张图片/附件）` : ''
+    const tools = turn.toolCalls > 0 ? `\n调用了 ${turn.toolCalls} 次工具` : ''
     tipNode = createElement('div', {
       key: 'tip',
       className: 'dsht_tip',
       ref: (node: HTMLDivElement | null): void => {
         if (node === null || pos === null) return
         const r = node.getBoundingClientRect()
-        // 显示在轨道左侧；水平空间不足时贴右侧翻转。
-        let left = window.innerWidth - pos.right - r.width - 50
-        if (left < 8) left = Math.max(8, window.innerWidth - pos.right - r.width - 4)
+        // 轨道右缘在屏幕 x = innerWidth - pos.right；悬停线延长后的左缘距轨道
+        // 右缘 = LINE_W + extOf(index)。tooltip 贴在这条左缘外侧再留 16px 空隙，
+        // 保证不被延长线条覆盖；水平空间不足时翻到贴近边缘。
+        const ext = extOf(hoveredIndex)
+        const edgeLeft = window.innerWidth - pos.right - (LINE_W + ext)
+        let left = edgeLeft - r.width - 16
+        if (left < 8) left = Math.max(8, edgeLeft - r.width - 4)
         node.style.left = `${left}px`
         node.style.top = `${Math.max(8, Math.min(window.innerHeight - r.height - 8, pos.top - r.height / 2))}px`
         node.style.right = 'auto'
@@ -443,12 +593,12 @@ function TimelineOverlay(props: HistoryDockProps & {
     }, [
       createElement('div', { key: 'h', className: 'dsht_tipHead' }, [
         createElement('span', { key: 'seq', className: 'dsht_tipSeq' }, `第 ${n} 轮`),
-        createElement('span', { key: 'time', className: 'dsht_tipTime' }, fmtTime(tip.turn.time)),
+        createElement('span', { key: 'time', className: 'dsht_tipTime' }, fmtTime(turn.time)),
       ]),
       createElement('div', { key: 'u', className: 'dsht_tipLabel' }, '用户'),
-      createElement('div', { key: 'ut', className: 'dsht_tipBody' }, truncate(tip.turn.userText || '(无文本)', 200)),
+      createElement('div', { key: 'ut', className: 'dsht_tipBody' }, truncate(turn.userText || '(无文本)', 200)),
       createElement('div', { key: 'a', className: 'dsht_tipLabel' }, 'Agent'),
-      createElement('div', { key: 'at', className: 'dsht_tipBody' }, truncate(tip.turn.assistantText || '(暂无回复)', 200)),
+      createElement('div', { key: 'at', className: 'dsht_tipBody' }, truncate(turn.assistantText || '(暂无回复)', 200)),
       createElement('div', { key: 'meta', className: 'dsht_tipMeta' }, `${attach}${tools}`.trim()),
     ])
   }
@@ -479,7 +629,7 @@ export const inject = ['slots']
  * @param ctx - client plugin context (slots, sessions, timer).
  */
 export function apply(ctx: Context): void {
-  ctx.effect(() => injectStyles(), 'dsh-history: stylesheet')
+  ctx.effect(() => injectStyles(), 'dsh-timeline: stylesheet')
   const slots = ctx.get('slots') as HistorySlotsService | undefined
   if (slots === undefined) return
   const sessions = ctx.get('sessions') as ClientSessionsService | undefined
@@ -493,7 +643,7 @@ export function apply(ctx: Context): void {
       return b.session.loadOlder()
     }
   slots.inject('conversation.input.dock', () => slots.register(
-    { name: 'conversation.input.dock', id: 'dsh-history-timeline', order: 40 },
+    { name: 'conversation.input.dock', id: 'dsh-timeline', order: 40 },
     (props: HistoryDockProps) => createElement(TimelineOverlay, {
       session: props.session,
       loadOlderFor,

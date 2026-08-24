@@ -1,5 +1,5 @@
 /**
- * Pure helpers for the dsh-history client half. No React, no plugin services —
+ * Pure helpers for the dsh-timeline client half. No React, no plugin services —
  * only thin DOM/browser helpers and data transforms. Kept in one file so the
  * component (index.ts) stays focused on rendering and state, and so utility
  * logic is testable in isolation.
@@ -68,6 +68,14 @@ export declare function collectWindowItems(session: HistoryConversationSnapshot 
 };
 /** Find the conversation row DOM element for a chat-node anchor key. */
 export declare function findAnchor(key: string): HTMLElement | null;
+/** Drive the scrollport partway toward `target` while older history is still
+ *  loading.  Clicking an unloaded turn scrolls up now so the motion starts
+ *  immediately; each `loadOlder` page prepends above the top, so pinning
+ *  toward the top keeps every newly loaded page entering the viewport and
+ *  the view approaches the target before the exact jump lands.  Returns a
+ *  cancel callback (the precise landing jump should stop this motion first,
+ *  otherwise both rAF loops would fight over scrollTop). */
+export declare function chaseScroll(port: HTMLElement, target: number, duration?: number): () => void;
 /** Scroll a message row into view (top-aligned) and flash-highlight it.
  *  Positions the conversation scrollport directly with a short animated
  *  scroll (see animateScroll), rather than relying on async scrollIntoView

@@ -1,5 +1,5 @@
 /**
- * dsh-history host half: one fenced HTTP route `/history/api` that reads the
+ * dsh-timeline host half: one fenced HTTP route `/history/api` that reads the
  * complete session log through `sessionQuery` and returns every `user/message`
  * event the human sent — including messages outside the client's currently
  * loaded window (compacted-over, paged-out, or older than the first page).
@@ -98,7 +98,7 @@ declare module 'cordis' {
 }
 
 /** Stable plugin name for the cordis row. */
-export const name = 'dsh-history'
+export const name = 'dsh-timeline'
 
 /** Services required before mounting: the web server routes and the trust list. */
 export const inject = ['webServer', 'webRuntime']
@@ -421,5 +421,5 @@ export function apply(ctx: Context): void {
       }
       writeJson(res, 404, { ok: false, error: `unknown history API method "${method}"` })
     },
-  }), 'dsh-history: /history/api route')
+  }), 'dsh-timeline: /history/api route')
 }

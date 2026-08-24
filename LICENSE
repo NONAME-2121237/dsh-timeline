@@ -1,16 +1,69 @@
-MIT License
+# dsh-timeline Open Source License v1.0
+# dsh-timeline 开源许可协议 v1.0
 
-Copyright (c) 2025 chenproton
+Copyright (c) 2026 NONAME-2121237
+（基线部分 Copyright (c) 2025 chenproton，依 MIT 许可 —— 见 LICENSE-MIT）
+
+This is a permissive custom license: it grants everyone broad, royalty-free
+rights to use, copy, modify and redistribute this software **for
+non-commercial purposes only**. Commercial use requires a separate written
+authorization of the copyright holder.
+
+本协议为宽松的定制开源许可：在**非商业目的**范围内，免费授予任何人使用、
+复制、修改、合并、发布、再许可及分发本软件的权利。**任何商业用途**
+（无论直接或间接获利）均须事先取得著作权人的书面许可。
+
+---
+
+## 1. Permission / 许可条款
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
+in the Software without restriction, **except that any use that constitutes
+commercial activity (as defined in Section 2) is prohibited**, including
+without limitation the rights to:
 
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
+- use, copy, modify, merge, publish and distribute the Software;
+- sublicense the above rights for non-commercial purposes;
+- prepare derivative works for non-commercial purposes.
+
+特此授予任何获得本软件及其相关文档文件（"本软件"）副本的人士免费权利，允许
+其在**不构成第 2 条所述商业活动的范围内**不受限制地处置本软件，包括但不限于：
+
+- 使用、复制、修改、合并、发布和分发本软件；
+- 为非商业目的转授权上述权利；
+- 为非商业目的创作衍生作品。
+
+## 2. Restriction / 商业用途限制
+
+"Commercial activity" means any activity whose purpose is or results in,
+directly or indirectly, monetary or commercial gain — including but not
+limited to selling, licensing or renting the Software, selling or licensing
+derivative works or services built upon the Software, internal commercial
+use, and deploying the Software in a commercial product or service.
+
+"商业活动"指任何以直接或间接谋取货币或其他商业利益为目的或结果的活动，
+包括但不限于：销售、许可或出租本软件；销售或许可基于本软件衍生的作品或
+服务；将本软件用于自身盈利经营活动；将本软件部署于任何商业产品、服务或
+商业组织内部。
+
+Any commercial use requires a prior, written authorization signed by the
+copyright holder; no such authorization is implied by this license.
+
+任何商业用途须事先取得著作权人签署的书面授权；本许可不隐含任何商业授权。
+
+## 3. Attribution / 署名条件
+
+The copyright notice above and this license (and, for the portions listed in
+NOTICE.md that are derived from the original project, the MIT license text
+and its copyright notice) shall be included in all copies or substantial
+portions of the Software. Derivative works must retain these notices.
+
+上述版权声明和本协议（对于 NOTICE.md 所列源自原项目的部分，还包括其在
+LICENSE-MIT 中的版权声明与 MIT 许可文本）须包含在本软件的所有副本或实质
+部分中，衍生作品亦须保留。
+
+## 4. No Warranty / 不作担保
 
 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
 IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
@@ -19,3 +72,17 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+
+本软件按"原样"提供，不作任何明示或暗示的担保，包括但不限于适销性、特定
+用途适用性及不侵权的担保。在任何情况下，作者或版权持有人均不对因使用本
+软件而产生的任何索赔、损害或其他责任负责，无论该责任源于合同、侵权或其他
+方面。
+
+---
+
+*Alteration, commercial licensing and other special terms are subject to the
+copyright holder's separate written agreement. For licensing inquiries,
+please open an issue or reach the author through the repository.*
+
+*修改授权、商业授权等特殊条款以著作权人另行签订的书面协议为准。如需授权
+磋商，请通过仓库 issue 或主页方式联系作者。*
