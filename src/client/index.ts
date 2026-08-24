@@ -107,6 +107,10 @@ const TIMELINE_CSS = `
 /* 跳转落地闪烁（src/client/util.ts scrollToKey 的 dshm-flash 类）：消息行软色块脉冲，由 animationend 清理。 */
 .dshm-flash{animation:dshmRowFlash 1.1s ease-out}
 @keyframes dshmRowFlash{0%,35%{background:rgba(59,130,246,.18);box-shadow:inset 0 0 0 1px rgba(59,130,246,.35)}100%{background:rgba(59,130,246,0);box-shadow:none}}
+/* 首载骨架：会话切换后、轮次数据到达前的半透明占位刻度，微光呼吸。 */
+.dsht_skelRow{pointer-events:none;cursor:default}
+.dsht_skelRow .dsht_bar{opacity:.3;animation:dshtSkel 1.2s ease-in-out infinite alternate}
+@keyframes dshtSkel{from{opacity:.22}to{opacity:.7}}
 .dsht_tip{position:fixed;z-index:9999;max-width:min(340px,calc(100vw - 24px));border-radius:12px;padding:10px 12px;font-size:12px;line-height:1.55;
   background:rgba(255,255,255,.92);-webkit-backdrop-filter:blur(16px) saturate(1.4);backdrop-filter:blur(16px) saturate(1.4);
   border:1px solid rgba(120,130,150,.28);box-shadow:0 10px 32px rgba(0,0,0,.14);color:#1f2937;pointer-events:none}
@@ -127,6 +131,10 @@ function TimelineOverlay(props: HistoryDockProps & {
   const session = props.session
   const sessionId = session?.sessionId
   const [turns, setTurns] = useState<TurnItem[]>([])
+  /** 当前会话是否已成功拿到过一轮次响应（区分"首载中"与"该会话确实无轮次"）。 */
+  const [loaded, setLoaded] = useState(false)
+  /** 上次重置加载标记的会话：仅真正的会话切换才重置，快照变化不重置。 */
+  const loadedSessionRef = useRef<string | null>(null)
   /** 胶片在视口内的像素偏移：0 = 最旧对齐视口顶，maxOff = 最新贴底。 */
   const [off, setOff] = useState(0)
   const [activeSeq, setActiveSeq] = useState<number | null>(null)
@@ -161,6 +169,11 @@ function TimelineOverlay(props: HistoryDockProps & {
   const HEXT_RADIUS = 30 // 水平有效半径：距中点 30px（= HEXT_SAT + 10，检查放远）以外不延长
   const EXT_PHASE = 1.35 // 正切相位：远段增长慢、贴近后急速拉满
   const HOVER_KEEP_RANGE = 100 // 光标保护区：离开轨道后仍保持延长/高亮的范围
+  /** 首载未完成前快速轮询，拿到底后降为常规周期（host 侧 3s TTL 缓存）。 */
+  const POLL_FAST_MS = 1000
+  const POLL_MS = 3000
+  /** 首载骨架占位刻度条数。 */
+  const SKELETON_BARS = 5
   const WHEEL_HOLD_MS = 1200 // 滚轮滚轨道后的抑制窗口：期间”跟随 active”不触发回弹
   const HOVER_LEAVE_MS = 400 // 移出保护区后等待多久才允许回弹（给鼠标一个缓冲期）
   const BUFFER = 2 // 视口上下各多渲染 BUFFER 根，滑动时不出现空白
@@ -185,6 +198,11 @@ function TimelineOverlay(props: HistoryDockProps & {
   // message rows land (they render asynchronously after switch).
   useEffect(() => {
     if (sessionId === undefined) return
+    // 只有真正的会话切换才重置首载标记（seqByKey/快照变化不是换会话）。
+    if (sessionId !== loadedSessionRef.current) {
+      loadedSessionRef.current = sessionId
+      setLoaded(false)
+    }
     let cancelled = false
     setActiveSeq(null)
     setOff(0)
@@ -201,6 +219,7 @@ function TimelineOverlay(props: HistoryDockProps & {
           if (cancelled) return
           const record = data as { ok?: boolean; turns?: TurnItem[] }
           if (record && record.ok === true && Array.isArray(record.turns)) {
+            setLoaded(true)
             const next = record.turns
             // 旧高亮不在新列表里时，默认高亮最新一轮（保证必有一条蓝线）。
             if (next.length > 0) {
@@ -214,7 +233,8 @@ function TimelineOverlay(props: HistoryDockProps & {
         .catch(() => { /* keep last known state */ })
     }
     load()
-    const timer = setInterval(load, 3000)
+    // 首载期快速轮询，让"尚未就绪"的会话尽快出数据；有数据后降为常规周期。
+    const timer = setInterval(load, loaded ? POLL_MS : POLL_FAST_MS)
     // 消息区 DOM 在会话切换后异步渲染：定时重跑检测以纠正高亮。
     const detect = setInterval(() => {
       const port = portRef.current
@@ -229,7 +249,7 @@ function TimelineOverlay(props: HistoryDockProps & {
       }
     }, 1000)
     return () => { cancelled = true; clearInterval(timer); clearInterval(detect) }
-  }, [sessionId, seqByKey])
+  }, [sessionId, seqByKey, loaded])
 
   // Geometry + active-turn tracking: pin the rail to the message viewport's
   // right edge. The message rows may not have rendered yet at mount time, so
@@ -337,6 +357,8 @@ function TimelineOverlay(props: HistoryDockProps & {
   // 顶的像素距离；滚轮与“跟随 active”都只写 targetRef，由同一个 glide 循环
   // 滑到目标，互不打断，运动是像素级连续的。
   const count = turns.length
+  /** 首载期：会话刚切换、还没拿到过成功的轮次响应 → 显示骨架占位轨道。 */
+  const loading = count === 0 && !loaded
   const maxOff = Math.max(0, count * LINE_STEP - VIEW_H)
   const lastIdxAll = Math.max(0, count - 1)
   const firstIdx = clamp(Math.floor(off / LINE_STEP) - BUFFER, 0, lastIdxAll)
@@ -528,7 +550,7 @@ function TimelineOverlay(props: HistoryDockProps & {
   // 悬停延长轮廓由「水平距离分量」驱动（替代固定拉满）：以延长前基段的中点为
   // 参照——光标距中点 ≤ HEXT_SAT 时即达最大长度（继续靠近不再加长），距中点
   // ≥ HEXT_RADIUS 不延长；中间按正切曲线过渡，较远时增长缓慢，接近后急速
-  // 拉满。相邻线仍按抛物线 (1-(d/r)²) 衰减，整体保持平滑的抛物线突起。
+  // 拉满。相邻线按陡峭的抛物线 (1-d/r)² 衰减，突起更尖锐，整体保持平滑。
   const railRightX = pos === null ? -1 : window.innerWidth - pos.right
   const midX = railRightX - LINE_W / 2 // 延长前基段的中点
   const extAmp = (u: number): number => {
@@ -543,12 +565,23 @@ function TimelineOverlay(props: HistoryDockProps & {
     const hx = hoverXRef.current
     const hd = hx < 0 ? 0 : Math.abs(hx - midX)
     const u = (HEXT_RADIUS - hd) / (HEXT_RADIUS - HEXT_SAT)
-    return (1 - (d / EXT_RADIUS) ** 2) * MAX_EXT * extAmp(u)
+    return (1 - d / EXT_RADIUS) ** 2 * MAX_EXT * extAmp(u)
   }
 
   // 只渲染视口 ± BUFFER 根线，绝对定位在各自槽位；整条胶片由 translateY(-off)
   // 驱动，滑动连续可见，超出视口的线被 .dsht_view 的边缘遮罩淡出。
   const lineNodes: ReactElement[] = []
+  if (loading) {
+    // 骨架：固定几根半透明占位刻度，数据到达后由真实线条替换，无交互。
+    for (let i = 0; i < SKELETON_BARS; i++) {
+      lineNodes.push(createElement('div', {
+        key: `skel${i}`,
+        className: 'dsht_line dsht_skelRow',
+        style: { top: `${i * LINE_STEP + 5}px`, width: `${LINE_W}px` },
+        'aria-hidden': 'true',
+      }, createElement('span', { className: 'dsht_bar dsht_skel' })))
+    }
+  }
   for (let idx = firstIdx; idx <= lastIdx; idx++) {
     const turn = turns[idx]
     if (turn === undefined) continue
@@ -567,7 +600,7 @@ function TimelineOverlay(props: HistoryDockProps & {
       key: 'view',
       ref: viewElRef,
       className: 'dsht_view',
-      style: { height: `${VIEW_H}px`, width: `${VIEW_W}px` },
+      style: { height: `${VIEW_H}px`, width: `${VIEW_W}px`, pointerEvents: loading ? 'none' : 'auto' },
       onWheel: handleWheel,
       onClick: () => {
         const hovered = hoveredIndex
@@ -625,11 +658,11 @@ function TimelineOverlay(props: HistoryDockProps & {
     createElement('div', {
       ref: rootRef,
       className: 'dsht_root',
-      style: pos !== null && count > 0 ? {
+      style: pos !== null && (count > 0 || loading) ? {
         top: pos.top,
         right: pos.right,
         transform: 'translateY(-50%)',
-        visibility: count > 0 ? 'visible' : 'hidden',
+        visibility: 'visible',
       } : { visibility: 'hidden' },
       'aria-hidden': activeInWindow ? undefined : 'true',
     }, children),
