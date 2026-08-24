@@ -157,6 +157,7 @@ function TimelineOverlay(props: HistoryDockProps & {
   const MAX_EXT = 30 // 悬停线条向左延长的最大像素数
   const VIEW_W = LINE_W + MAX_EXT // 视口宽 = 基准 + 最大延长，悬停伸长不截断
   const EXT_RADIUS = 3 // 延长作用半径：距悬停线几根以内按抛物线衰减
+  const HEXT_RADIUS = 32 // 水平延长的有效半径：光标与线基段的水平距离超过此值不再延长
   const HOVER_KEEP_RANGE = 100 // 光标保护区：离开轨道后仍保持延长/高亮的范围
   const WHEEL_HOLD_MS = 1200 // 滚轮滚轨道后的抑制窗口：期间”跟随 active”不触发回弹
   const HOVER_LEAVE_MS = 400 // 移出保护区后等待多久才允许回弹（给鼠标一个缓冲期）
@@ -467,6 +468,8 @@ function TimelineOverlay(props: HistoryDockProps & {
 
   /** 光标视口相对 y（在轨道内/保护区内时有效，-1 表示不在保护区）。 */
   const cursorYRef = useRef(-1)
+  /** 光标屏幕 x：水平距离分量，驱动悬停中心线的延长量（见 extOf）。 */
+  const hoverXRef = useRef(-1)
   /** 光标是否处于「轨道内或 HOVER_KEEP_RANGE 保护区」中。 */
   const hoverZoneRef = useRef(false)
   /** 滚轮滚轨道时的最近时间戳：跟随回弹让位给用户（见 WHEEL_HOLD_MS 抑制）。 */
@@ -507,6 +510,7 @@ function TimelineOverlay(props: HistoryDockProps & {
         const rect = el.getBoundingClientRect()
         cursorYRef.current = rect.height > 0 ? Math.max(0, Math.min(rect.height - 1, e.clientY - rect.top)) : -1
       }
+      hoverXRef.current = e.clientX
       hoverZoneRef.current = true
       setHoverTick((t) => t + 1)
     }
@@ -519,13 +523,22 @@ function TimelineOverlay(props: HistoryDockProps & {
     ? clamp(Math.round((cursorYRef.current - 5 + off) / LINE_STEP), 0, Math.max(0, count - 1))
     : null
 
-  // 悬停延长轮廓：鼠标所指的线最长，相邻线按抛物线 (1-(d/r)²) 平滑衰减，
-  // 半径外不动。宽度写在 inline style 上，由 CSS 的 width transition 补齐动画。
+  // 悬停延长轮廓由「水平距离分量」驱动（替代固定拉满）：光标离线基段越近，
+  // 悬停中心线越长，距离超过 HEXT_RADIUS 就不延长；相邻线仍按抛物线
+  // (1-(d/r)²) 衰减，整体保持平滑的抛物线突起。宽度写在 inline style 上，
+  // 由 CSS 的 width transition 补齐动画。
+  const railRightX = pos === null ? -1 : window.innerWidth - pos.right
+  const baseLeftX = railRightX - LINE_W
   const extOf = (idx: number): number => {
-    if (hoveredIndex === null) return 0
+    if (hoveredIndex === null || railRightX < 0) return 0
     const d = Math.abs(idx - hoveredIndex)
     if (d > EXT_RADIUS) return 0
-    return (1 - (d / EXT_RADIUS) ** 2) * MAX_EXT
+    const hx = hoverXRef.current
+    // 到线基段 [baseLeftX, railRightX] 的水平距离（左右对称；在段上为 0）。
+    const hd = hx < 0 ? 0 : Math.max(0, baseLeftX - hx, hx - railRightX)
+    const t = Math.min(1, hd / HEXT_RADIUS)
+    const amp = MAX_EXT * (1 - t) * (1 - t)
+    return (1 - (d / EXT_RADIUS) ** 2) * amp
   }
 
   // 只渲染视口 ± BUFFER 根线，绝对定位在各自槽位；整条胶片由 translateY(-off)
