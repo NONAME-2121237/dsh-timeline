@@ -167,8 +167,13 @@ function TimelineOverlay(props: HistoryDockProps & {
   const VIEW_W = LINE_W + MAX_EXT // 视口宽 = 基准 + 最大延长，悬停伸长不截断
   const EXT_RADIUS = 3 // 延长作用半径：距悬停线几根以内按抛物线衰减
   const HEXT_SAT = 20 // 水平饱和距离：光标距延长前基段中点 ≤20px 即达最大长度
-  const HEXT_RADIUS = 30 // 水平有效半径：距中点 30px（= HEXT_SAT + 10，检查放远）以外不延长
+  const HEXT_RADIUS = 50 // 水平有效半径：距中点 50px（= HEXT_SAT + 20 + 10 的两次放远）以外不延长
   const EXT_PHASE = 1.35 // 正切相位：远段增长慢、贴近后急速拉满
+  /** tooltip 触发左边界 = 线条触发左边界再向右收 10px（最左窄带只延长不弹提示）。 */
+  const HOVER_TIP_INSET = 10
+  /** 光标距线中心超过该值视为"不在线上"：线槽高 18px、两线间最大距离 9px，
+   *  线少时空槽位不再把光标 clamp 到最远处那条线。 */
+  const HOVER_NEAR = 13
   const HOVER_KEEP_RANGE = 100 // 光标保护区：离开轨道后仍保持延长/高亮的范围
   /** 首载未完成前快速轮询，拿到底后降为常规周期（host 侧 3s TTL 缓存）。 */
   const POLL_FAST_MS = 1000
@@ -517,11 +522,15 @@ function TimelineOverlay(props: HistoryDockProps & {
     if (el === null) return 'out'
     const rect = el.getBoundingClientRect()
     if (rect.width === 0 || rect.height === 0) return 'out'
-    if (e.clientX >= rect.left && e.clientX <= rect.right
-      && e.clientY >= rect.top && e.clientY <= rect.bottom) return 'in'
-    // 保护区只向左扩展：轨道右缘之外是系统默认容器/侧边栏，不参与时间线检测。
-    if (e.clientX >= rect.left - HOVER_KEEP_RANGE && e.clientX <= rect.right
-      && e.clientY >= rect.top - HOVER_KEEP_RANGE && e.clientY <= rect.bottom + HOVER_KEEP_RANGE) return 'near'
+    // 触发范围以「线条动画的左侧最远触发位置」（基段中点 - HEXT_RADIUS）为界，
+    // 比视口左缘更宽；轨道右缘之外是系统默认容器/侧边栏，不参与检测。
+    const extLeftX = pos === null
+      ? rect.left
+      : window.innerWidth - pos.right - LINE_W / 2 - HEXT_RADIUS
+    const inY = e.clientY >= rect.top && e.clientY <= rect.bottom
+    const nearY = e.clientY >= rect.top - HOVER_KEEP_RANGE && e.clientY <= rect.bottom + HOVER_KEEP_RANGE
+    if (e.clientX >= extLeftX && e.clientX <= rect.right && inY) return 'in'
+    if (e.clientX >= extLeftX - HOVER_KEEP_RANGE && e.clientX <= rect.right && nearY) return 'near'
     return 'out'
   }
 
@@ -549,10 +558,16 @@ function TimelineOverlay(props: HistoryDockProps & {
     return () => document.removeEventListener('mousemove', onMove)
   }, [])
 
-  // 渲染期推导的悬停线索引：光标在保护区内且有 y 时才有效。
-  const hoveredIndex = hoverZoneRef.current && cursorYRef.current >= 0
-    ? clamp(Math.round((cursorYRef.current - 5 + off) / LINE_STEP), 0, Math.max(0, count - 1))
-    : null
+  // 渲染期推导的悬停线索引：光标必须落在某一根**实际渲染**的线附近才有效。
+  // 线少时容器底部/空白槽位不再把光标 clamp 到最远处那条线（mousemove 只
+  // 触发重渲染，不存推导结果）。
+  const hoveredIndex = (() => {
+    if (!hoverZoneRef.current || cursorYRef.current < 0) return null
+    const raw = Math.round((cursorYRef.current - 6.5) / LINE_STEP)
+    const near = clamp(raw, 0, Math.max(0, count - 1))
+    const dist = Math.abs(cursorYRef.current - (near * LINE_STEP + 6.5))
+    return dist <= HOVER_NEAR ? near : null
+  })()
 
   // 悬停延长轮廓由「水平距离分量」驱动（替代固定拉满）：以延长前基段的中点为
   // 参照——光标距中点 ≤ HEXT_SAT 时即达最大长度（继续靠近不再加长），距中点
@@ -574,6 +589,11 @@ function TimelineOverlay(props: HistoryDockProps & {
     const u = (HEXT_RADIUS - hd) / (HEXT_RADIUS - HEXT_SAT)
     return (1 - d / EXT_RADIUS) ** 2 * MAX_EXT * extAmp(u)
   }
+
+  /** tooltip 触发左边界 = 线条触发范围最左侧向右收 HOVER_TIP_INSET。 */
+  const tipLeftX = railRightX < 0 ? -1 : midX - HEXT_RADIUS + HOVER_TIP_INSET
+  /** tooltip 悬停索引：只在「延长生效且光标越过无提示窄带」后才有值。 */
+  const tipIndex = hoveredIndex !== null && hoverXRef.current >= tipLeftX ? hoveredIndex : null
 
   // 只渲染视口 ± BUFFER 根线，绝对定位在各自槽位；整条胶片由 translateY(-off)
   // 驱动，滑动连续可见，超出视口的线被 .dsht_view 的边缘遮罩淡出。
@@ -626,9 +646,9 @@ function TimelineOverlay(props: HistoryDockProps & {
   // Tooltip: 跟随渲染期推导的悬停线（滚动时随胶片动态切换线内容）;
   // auto-flip 保证不超出视口，并贴着延长后线条外沿留 16px，不被线条覆盖。
   let tipNode: ReactElement | null = null
-  if (hoveredIndex !== null && turns[hoveredIndex] !== undefined) {
-    const turn = turns[hoveredIndex]
-    const n = hoveredIndex + 1
+  if (tipIndex !== null && turns[tipIndex] !== undefined) {
+    const turn = turns[tipIndex]
+    const n = tipIndex + 1
     const attach = turn.userAttachments > 0 ? `（含 ${turn.userAttachments} 张图片/附件）` : ''
     const tools = turn.toolCalls > 0 ? `\n调用了 ${turn.toolCalls} 次工具` : ''
     tipNode = createElement('div', {
@@ -640,7 +660,7 @@ function TimelineOverlay(props: HistoryDockProps & {
         // 轨道右缘在屏幕 x = innerWidth - pos.right；悬停线延长后的左缘距轨道
         // 右缘 = LINE_W + extOf(index)。tooltip 贴在这条左缘外侧再留 16px 空隙，
         // 保证不被延长线条覆盖；水平空间不足时翻到贴近边缘。
-        const ext = extOf(hoveredIndex)
+        const ext = extOf(tipIndex)
         const edgeLeft = window.innerWidth - pos.right - (LINE_W + ext)
         let left = edgeLeft - r.width - 16
         if (left < 8) left = Math.max(8, edgeLeft - r.width - 4)
