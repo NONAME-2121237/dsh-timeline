@@ -2,6 +2,8 @@
 
 A DSH web plugin that renders an **interaction timeline** for long conversations: a compact rail of short ticks on the right edge of the message area — one tick per turn (each message you sent). Hover for a preview, click to jump, scroll with the wheel, and recall your recent messages with ↑/↓ in the composer.
 
+If you like it after installing, please give me a star.
+
 [中文](README.md) | English
 
 ---
@@ -33,12 +35,15 @@ bash ~/.dsh/profiles/web/node_modules/dsh-timeline/restart-dsh-web.sh
 
 This channel uses the committed build output (`lib/` is committed), no local build needed.
 
+Then read [GetStar](GetStar.en.md)
+
 ### From npm
 
 ```bash
 dsh plugin --profile web add dsh-timeline@latest
 bash ~/.dsh/profiles/web/node_modules/dsh-timeline/restart-dsh-web.sh
 ```
+Then read [GetStar](GetStar.en.md)
 
 ### Via plugin-registry
 
@@ -52,6 +57,7 @@ dsh registry install ./registry        # install (disabled by default)
 dsh registry enable dsh-external/dsh-timeline
 bash restart-dsh-web.sh
 ```
+Then read [GetStar](GetStar.en.md)
 
 ### Migrating from dsh-history
 
@@ -62,6 +68,7 @@ dsh plugin --profile web remove dsh-history
 bash ~/.dsh/profiles/web/node_modules/dsh-history/restart-dsh-web.sh
 # then install dsh-timeline through any channel above
 ```
+Then read [GetStar](GetStar.en.md)
 
 ## Caching & performance
 

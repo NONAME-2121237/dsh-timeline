@@ -2,6 +2,8 @@
 
 DSH Web 插件：超长会话的**交互时间线**——消息区右缘一列细刻度线，每根线代表你发的一条消息（一个交互轮次），悬停预览、点击跳转、滚轮浏览，配合键盘 ↑/↓ 快速回忆自己说过的话。
 
+如果您安装后觉得还不错请给我点个star
+
 [English](README.en.md) | 中文
 
 ---
@@ -33,12 +35,15 @@ bash ~/.dsh/profiles/web/node_modules/dsh-timeline/restart-dsh-web.sh
 
 此方式直接使用仓库已提交的构建产物（`lib/` 已随仓库提交），无需本地构建。
 
+然后阅读[GetStar](GetStar.md)
+
 ### 从 npm 安装
 
 ```bash
 dsh plugin --profile web add dsh-timeline@latest
 bash ~/.dsh/profiles/web/node_modules/dsh-timeline/restart-dsh-web.sh
 ```
+然后阅读[GetStar](GetStar.md)
 
 ### 从 plugin-registry 安装
 
@@ -52,6 +57,7 @@ dsh registry install ./registry        # 安装（默认禁用）
 dsh registry enable dsh-external/dsh-timeline
 bash restart-dsh-web.sh                # 自动重启生效
 ```
+然后阅读[GetStar](GetStar.md)
 
 ### 从旧版 dsh-history 迁移
 
@@ -62,6 +68,7 @@ dsh plugin --profile web remove dsh-history   # 或按你此前所用的通道�
 bash ~/.dsh/profiles/web/node_modules/dsh-history/restart-dsh-web.sh
 # 然后按上方任一方式安装 dsh-timeline
 ```
+然后阅读[GetStar](GetStar.md)
 
 ## 缓存与性能
 
