@@ -325,7 +325,12 @@ function TimelineOverlay(props: HistoryDockProps & {
         if (bound !== null) bound.removeEventListener('scroll', onScroll)
         bound = portNew
         portRef.current = portNew
-        if (portNew !== null) portNew.addEventListener('scroll', onScroll, { passive: true })
+        if (portNew !== null) {
+          portNew.addEventListener('scroll', onScroll, { passive: true })
+          // 消息滚动容器也纳入观测：右侧系统容器/侧边栏展开挤压消息区、
+          // 或任何布局位移改变其尺寸时，轨道即刻重定位（轮询只是兜底）。
+          ro?.observe(portNew)
+        }
       }
       const target = portNew ?? el.parentElement ?? el
       const r = target.getBoundingClientRect()
@@ -514,7 +519,8 @@ function TimelineOverlay(props: HistoryDockProps & {
     if (rect.width === 0 || rect.height === 0) return 'out'
     if (e.clientX >= rect.left && e.clientX <= rect.right
       && e.clientY >= rect.top && e.clientY <= rect.bottom) return 'in'
-    if (e.clientX >= rect.left - HOVER_KEEP_RANGE && e.clientX <= rect.right + HOVER_KEEP_RANGE
+    // 保护区只向左扩展：轨道右缘之外是系统默认容器/侧边栏，不参与时间线检测。
+    if (e.clientX >= rect.left - HOVER_KEEP_RANGE && e.clientX <= rect.right
       && e.clientY >= rect.top - HOVER_KEEP_RANGE && e.clientY <= rect.bottom + HOVER_KEEP_RANGE) return 'near'
     return 'out'
   }
